@@ -5,9 +5,9 @@ import os
 from collections import defaultdict
 from typing import Dict, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Security
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.responses import PlainTextResponse, StreamingResponse
-from fastapi.security import APIKeyHeader
+from fastapi.security import APIKeyHeader, APIKeyQuery
 from pydantic import BaseModel, constr
 from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -32,16 +32,25 @@ MAX_TOTAL_CHATS = 100
 
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
-# --- Security & Rate Limiting ---
-SECRET_API_KEY = "your-secret-key-here"  # ⚠️ IMPORTANT: Change this!
+# --- [MODIFIED] Security & Rate Limiting ---
+SECRET_API_KEY = "ViperROX"  # ⚠️ IMPORTANT: Change this!
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+API_KEY_QUERY = APIKeyQuery(name="api_key", auto_error=False)
 limiter = Limiter(key_func=get_remote_address)
 chat_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-async def get_api_key(api_key: str = Security(API_KEY_HEADER)):
+async def get_api_key(
+    api_key_header: str = Security(API_KEY_HEADER),
+    api_key_query: str = Security(API_KEY_QUERY),
+):
+    """Dependency to validate API key from header or query parameter."""
     if SECRET_API_KEY == "your-secret-key-here":
-        logger.warning("Running with the default API key. The application is insecure.")
-        return
+        logger.warning("Running with a default/insecure API key.")
+        return # Bypass check for easy local setup
+    
+    # Prefer header, but fall back to query parameter
+    api_key = api_key_header or api_key_query
+    
     if api_key == SECRET_API_KEY:
         return api_key
     raise HTTPException(status_code=403, detail="Could not validate credentials")
@@ -58,43 +67,37 @@ class ChatRequest(BaseModel):
 app = FastAPI(
     title="Full-Featured LLM Backend",
     description="An advanced, streaming-capable API for local LLMs via llama-cli.",
-    version="1.1.1", # Incremented version for the fix
+    version="1.2.0",
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 Instrumentator().instrument(app).expose(app)
 
-
-# --- Middleware for Attribution Header ---
+# --- Middleware (unchanged) ---
 @app.middleware("http")
 async def add_creator_header(request: Request, call_next):
     response = await call_next(request)
-    # [FIX] Use an ASCII-safe alternative for the heart emoji to prevent encoding errors
     response.headers["X-Creator"] = "Made With <3 By SAHABAJ"
     return response
 
-
-# --- Helper Functions ---
+# --- Helper Functions (unchanged) ---
 def get_sanitized_history_path(chat_id: SafeChatID) -> str:
     return os.path.join(HISTORY_DIR, f"{chat_id}.json")
 
 def load_chat_data(chat_id: SafeChatID) -> dict:
     history_file = get_sanitized_history_path(chat_id)
     if os.path.exists(history_file):
-        with open(history_file, "r") as f:
-            return json.load(f)
+        with open(history_file, "r") as f: return json.load(f)
     return {"system_prompt": None, "history": []}
 
 def save_chat_data(chat_id: SafeChatID, data: dict):
     history_file = get_sanitized_history_path(chat_id)
-    with open(history_file, "w") as f:
-        json.dump(data, f, indent=2)
+    with open(history_file, "w") as f: json.dump(data, f, indent=2)
 
-# --- Core Streaming Logic ---
+# --- Core Logic (unchanged) ---
 async def stream_llama_response(chat_request: ChatRequest):
     lock = chat_locks[chat_request.chat_id]
-    async with lock:
-        chat_data = load_chat_data(chat_request.chat_id)
+    async with lock: chat_data = load_chat_data(chat_request.chat_id)
 
     system_prompt, chat_history = chat_data.get("system_prompt"), chat_data.get("history", [])[-MAX_HISTORY_MESSAGES:]
     prompt_parts = []
@@ -102,8 +105,7 @@ async def stream_llama_response(chat_request: ChatRequest):
         logger.info(f"Using system prompt for chat_id '{chat_request.chat_id}'")
         prompt_parts.append(system_prompt)
 
-    for turn in chat_history:
-        prompt_parts.append(f"### Human: {turn['user']}\n### Assistant: {turn['assistant']}")
+    for turn in chat_history: prompt_parts.append(f"### Human: {turn['user']}\n### Assistant: {turn['assistant']}")
     prompt_parts.append(f"### Human: {chat_request.message}\n### Assistant:")
     full_prompt = "\n".join(prompt_parts)
 
@@ -139,22 +141,10 @@ async def stream_llama_response(chat_request: ChatRequest):
         logger.info(f"History updated for chat_id: '{chat_request.chat_id}'")
 
 
-# --- API Endpoints ---
-@app.get("/", tags=["General"])
-async def read_root():
-    """Provides a welcome message."""
-    return {"message": "Welcome to the Secure LLM Backend API!"}
-
-@app.get("/health", tags=["Monitoring"])
-async def health_check():
-    """Provides a simple health check for uptime monitoring."""
-    return {"status": "ok"}
-
-@app.post("/chat", tags=["Core"])
-@limiter.limit("20/hour")
-async def chat(request: Request, chat_request: ChatRequest, dry_run: bool = False, api_key: str = Depends(get_api_key)):
-    """Main chat endpoint. Streams the LLM response and enforces rate limits."""
-    log_extra = f"(Dry Run)" if dry_run else ""
+# --- [REFACTORED] Central Chat Request Handler ---
+async def process_chat_request(request: Request, chat_request: ChatRequest, dry_run: bool):
+    """Unified logic for handling both GET and POST chat requests."""
+    log_extra = "(Dry Run)" if dry_run else ""
     logger.info(f"Chat request for '{chat_request.chat_id}' from IP: {request.client.host} {log_extra}")
 
     history_path = get_sanitized_history_path(chat_request.chat_id)
@@ -169,19 +159,47 @@ async def chat(request: Request, chat_request: ChatRequest, dry_run: bool = Fals
 
     if dry_run:
         chat_data = load_chat_data(chat_request.chat_id)
-        system_prompt, chat_history = chat_data.get("system_prompt"), chat_data.get("history", [])[-MAX_HISTORY_MESSAGES:]
+        system_prompt, history = chat_data.get("system_prompt"), chat_data.get("history", [])[-MAX_HISTORY_MESSAGES:]
         prompt_parts = []
         if system_prompt: prompt_parts.append(system_prompt)
-        for turn in chat_history:
-            prompt_parts.append(f"### Human: {turn['user']}\n### Assistant: {turn['assistant']}")
+        for turn in history: prompt_parts.append(f"### Human: {turn['user']}\n### Assistant: {turn['assistant']}")
         prompt_parts.append(f"### Human: {chat_request.message}\n### Assistant:")
         return PlainTextResponse("\n".join(prompt_parts))
         
     return StreamingResponse(stream_llama_response(chat_request), media_type="text/plain")
 
+
+# --- API Endpoints ---
+@app.get("/", tags=["General"])
+async def read_root():
+    return {"message": "Welcome to the Secure LLM Backend API!"}
+
+@app.get("/health", tags=["Monitoring"])
+async def health_check():
+    return {"status": "ok"}
+
+@app.post("/chat", tags=["Core"])
+@limiter.limit("20/hour")
+async def chat_post(request: Request, chat_request: ChatRequest, dry_run: bool = False, api_key: str = Depends(get_api_key)):
+    """Handles a chat request via POST with a JSON body."""
+    return await process_chat_request(request, chat_request, dry_run)
+
+@app.get("/chat", tags=["Core"])
+@limiter.limit("20/hour")
+async def chat_get(
+    request: Request,
+    message: SafeStr = Query(..., description="The message to send to the model."),
+    chat_id: SafeChatID = Query("default", description="The session ID for the chat."),
+    dry_run: bool = Query(False, description="If true, returns the prompt without calling the model."),
+    api_key: str = Depends(get_api_key),
+):
+    """Handles a chat request via GET with query parameters."""
+    chat_request = ChatRequest(message=message, chat_id=chat_id)
+    return await process_chat_request(request, chat_request, dry_run)
+
+# --- Management Endpoints (unchanged) ---
 @app.get("/chats", tags=["History Management"])
 async def list_chats(api_key: str = Depends(get_api_key)):
-    """Lists all available chat session IDs."""
     logger.info("Chat list requested.")
     try:
         files = [f for f in os.listdir(HISTORY_DIR) if f.endswith(".json")]
@@ -193,7 +211,6 @@ async def list_chats(api_key: str = Depends(get_api_key)):
 
 @app.get("/history/{chat_id}", tags=["History Management"])
 async def get_history(chat_id: SafeChatID, api_key: str = Depends(get_api_key)):
-    """Retrieves the full conversation data for a given chat_id."""
     logger.info(f"History requested for chat_id: '{chat_id}'")
     history_file = get_sanitized_history_path(chat_id)
     if not os.path.exists(history_file):
@@ -202,13 +219,11 @@ async def get_history(chat_id: SafeChatID, api_key: str = Depends(get_api_key)):
 
 @app.delete("/history/{chat_id}", tags=["History Management"])
 async def delete_history(chat_id: SafeChatID, api_key: str = Depends(get_api_key)):
-    """Safely deletes the conversation history for a given chat_id."""
     logger.info(f"Delete request for chat_id: '{chat_id}'")
     lock = chat_locks[chat_id]
     async with lock:
         history_file = get_sanitized_history_path(chat_id)
         if not os.path.exists(history_file):
-            logger.warning(f"Attempted to delete non-existent history for chat_id: '{chat_id}'")
             raise HTTPException(status_code=404, detail="Chat history not found.")
         try:
             os.remove(history_file)
@@ -217,3 +232,4 @@ async def delete_history(chat_id: SafeChatID, api_key: str = Depends(get_api_key
         except OSError as e:
             logger.error(f"Failed to delete '{history_file}': {e}")
             raise HTTPException(status_code=500, detail="Failed to delete history file.")
+            
