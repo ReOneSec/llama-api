@@ -58,22 +58,23 @@ class ChatRequest(BaseModel):
 app = FastAPI(
     title="Full-Featured LLM Backend",
     description="An advanced, streaming-capable API for local LLMs via llama-cli.",
-    version="1.1.0",
+    version="1.1.1", # Incremented version for the fix
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 Instrumentator().instrument(app).expose(app)
 
 
-# --- [ATTRIBUTION] Middleware to add custom header to all responses ---
+# --- Middleware for Attribution Header ---
 @app.middleware("http")
 async def add_creator_header(request: Request, call_next):
     response = await call_next(request)
-    response.headers["X-Creator"] = "Made With ❤️ By SAHABAJ"
+    # [FIX] Use an ASCII-safe alternative for the heart emoji to prevent encoding errors
+    response.headers["X-Creator"] = "Made With <3 By SAHABAJ"
     return response
 
 
-# --- Helper Functions (unchanged) ---
+# --- Helper Functions ---
 def get_sanitized_history_path(chat_id: SafeChatID) -> str:
     return os.path.join(HISTORY_DIR, f"{chat_id}.json")
 
@@ -89,7 +90,7 @@ def save_chat_data(chat_id: SafeChatID, data: dict):
     with open(history_file, "w") as f:
         json.dump(data, f, indent=2)
 
-# --- Core Streaming Logic (unchanged) ---
+# --- Core Streaming Logic ---
 async def stream_llama_response(chat_request: ChatRequest):
     lock = chat_locks[chat_request.chat_id]
     async with lock:
@@ -216,4 +217,3 @@ async def delete_history(chat_id: SafeChatID, api_key: str = Depends(get_api_key
         except OSError as e:
             logger.error(f"Failed to delete '{history_file}': {e}")
             raise HTTPException(status_code=500, detail="Failed to delete history file.")
-            
