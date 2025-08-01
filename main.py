@@ -54,15 +54,24 @@ class ChatRequest(BaseModel):
     message: SafeStr
     chat_id: SafeChatID = "default"
 
-# --- [ATTRIBUTION] FastAPI App Initialization Updated ---
+# --- FastAPI App Initialization ---
 app = FastAPI(
     title="Full-Featured LLM Backend",
-    description="An advanced, streaming-capable API for local LLMs. Made With ❤️ By SAHABAJ.",
-    version="1.0.0",
+    description="An advanced, streaming-capable API for local LLMs via llama-cli.",
+    version="1.1.0",
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 Instrumentator().instrument(app).expose(app)
+
+
+# --- [ATTRIBUTION] Middleware to add custom header to all responses ---
+@app.middleware("http")
+async def add_creator_header(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Creator"] = "Made With ❤️ By SAHABAJ"
+    return response
+
 
 # --- Helper Functions (unchanged) ---
 def get_sanitized_history_path(chat_id: SafeChatID) -> str:
@@ -130,12 +139,10 @@ async def stream_llama_response(chat_request: ChatRequest):
 
 
 # --- API Endpoints ---
-
-# --- [ATTRIBUTION] New Root Endpoint ---
 @app.get("/", tags=["General"])
 async def read_root():
-    """Provides a welcome message and API creator information."""
-    return {"message": "Welcome to the Secure LLM Backend API!", "creator": "Made With ❤️ By SAHABAJ"}
+    """Provides a welcome message."""
+    return {"message": "Welcome to the Secure LLM Backend API!"}
 
 @app.get("/health", tags=["Monitoring"])
 async def health_check():
@@ -209,4 +216,4 @@ async def delete_history(chat_id: SafeChatID, api_key: str = Depends(get_api_key
         except OSError as e:
             logger.error(f"Failed to delete '{history_file}': {e}")
             raise HTTPException(status_code=500, detail="Failed to delete history file.")
-
+            
