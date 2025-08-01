@@ -54,8 +54,12 @@ class ChatRequest(BaseModel):
     message: SafeStr
     chat_id: SafeChatID = "default"
 
-# --- FastAPI App Initialization ---
-app = FastAPI(title="Full-Featured LLM Backend")
+# --- [ATTRIBUTION] FastAPI App Initialization Updated ---
+app = FastAPI(
+    title="Full-Featured LLM Backend",
+    description="An advanced, streaming-capable API for local LLMs. Made With ❤️ By SAHABAJ.",
+    version="1.0.0",
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 Instrumentator().instrument(app).expose(app)
@@ -126,6 +130,13 @@ async def stream_llama_response(chat_request: ChatRequest):
 
 
 # --- API Endpoints ---
+
+# --- [ATTRIBUTION] New Root Endpoint ---
+@app.get("/", tags=["General"])
+async def read_root():
+    """Provides a welcome message and API creator information."""
+    return {"message": "Welcome to the Secure LLM Backend API!", "creator": "Made With ❤️ By SAHABAJ"}
+
 @app.get("/health", tags=["Monitoring"])
 async def health_check():
     """Provides a simple health check for uptime monitoring."""
@@ -159,8 +170,6 @@ async def chat(request: Request, chat_request: ChatRequest, dry_run: bool = Fals
         return PlainTextResponse("\n".join(prompt_parts))
         
     return StreamingResponse(stream_llama_response(chat_request), media_type="text/plain")
-
-# --- [SUGGESTION] Re-added Management Endpoints ---
 
 @app.get("/chats", tags=["History Management"])
 async def list_chats(api_key: str = Depends(get_api_key)):
@@ -200,4 +209,4 @@ async def delete_history(chat_id: SafeChatID, api_key: str = Depends(get_api_key
         except OSError as e:
             logger.error(f"Failed to delete '{history_file}': {e}")
             raise HTTPException(status_code=500, detail="Failed to delete history file.")
-      
+
