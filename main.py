@@ -23,8 +23,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Application Configuration ---
-LLAMA_CLI_PATH = "/home/viperrox/llama.cpp/build/bin/llama-cli"
-MODEL_PATH = "/home/viperrox/llama.cpp/models/zephyr.gguf"
+LLAMA_CLI_PATH = "/home/viper/llama.cpp/build/bin/llama-cli"
+MODEL_PATH = "/home/viper/llama.cpp/models/zephyr/zephyr.gguf"
 HISTORY_DIR = "chat_history"
 MAX_HISTORY_MESSAGES = 10
 MAX_INPUT_LENGTH = 2048
